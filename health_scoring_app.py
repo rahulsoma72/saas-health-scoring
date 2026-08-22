@@ -85,11 +85,7 @@ lookback_days = st.sidebar.number_input(
     "Lookback window (days)", min_value=30, max_value=365, value=90
 )
 
-st.sidebar.caption(
-    "Default values match the dissertation's frozen specification "
-    "(cutoff 30 Sept 2024, 90-day lookback). Changing these "
-    "re-derives the account population and predictions live."
-)
+
 
 # ============================================================
 # DATA CONSTRUCTION (cached, matches the dissertation pipeline)
