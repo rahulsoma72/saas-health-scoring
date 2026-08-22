@@ -67,7 +67,17 @@ st.sidebar.subheader("Prediction Window")
 
 cutoff_date = st.sidebar.date_input(
     "Prediction cutoff date",
-    value=pd.Timestamp("2024-09-30")
+    value=pd.Timestamp("2024-09-30"),
+    help=(
+        "About prediction settings: Default settings match the "
+        "dissertation's final modelling configuration - 30 September "
+        "2024 cutoff with a 90-day historical lookback. Changing the "
+        "cutoff creates a different historical account snapshot and "
+        "recalculates the model inputs for that date. The same frozen "
+        "Random Forest is applied; the model is not retrained. "
+        "Prediction dates are available only where the loaded data "
+        "provide sufficient historical information."
+    )
 )
 cutoff_date = pd.Timestamp(cutoff_date)
 
