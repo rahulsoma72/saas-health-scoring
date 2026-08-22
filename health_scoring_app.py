@@ -168,9 +168,10 @@ FROZEN_METADATA_PATH = "ravenstack_frozen_model_metadata.json"
 frozen_model_loaded = os.path.exists(FROZEN_MODEL_PATH)
 
 if frozen_model_loaded:
-    model = joblib.load(FROZEN_MODEL_PATH)
+    raw_classifier = joblib.load(FROZEN_MODEL_PATH)
     with open(FROZEN_METADATA_PATH) as f:
         model_metadata = json.load(f)
+    imputer_medians = model_metadata["imputer_medians"]
 else:
     st.warning(
         "⚠️ Frozen dissertation model file "
@@ -197,10 +198,20 @@ else:
         pipe.fit(X, y)
         return pipe
 
-    model = fit_fallback_model(master)
+    fallback_pipe = fit_fallback_model(master)
+    raw_classifier = fallback_pipe.named_steps["model"]
+    imputer_medians = dict(zip(
+        FINAL_FEATURES, fallback_pipe.named_steps["imputer"].statistics_.tolist()
+    ))
     model_metadata = None
 
-X_all = master[FINAL_FEATURES]
+# Apply the same median-fill manually - avoids unpickling any
+# SimpleImputer object, sidestepping sklearn version mismatches.
+X_all = master[FINAL_FEATURES].copy()
+for col in FINAL_FEATURES:
+    X_all[col] = X_all[col].fillna(imputer_medians[col])
+
+model = raw_classifier
 churn_proba = model.predict_proba(X_all)[:, 1]
 
 scored = master.copy()
@@ -231,10 +242,8 @@ action_map = {
 }
 scored["recommended_action"] = scored["risk_band"].map(action_map)
 
-explainer = shap.TreeExplainer(model.named_steps["model"])
-X_imputed = model.named_steps["imputer"].transform(X_all)
-X_imputed_df = pd.DataFrame(X_imputed, columns=FINAL_FEATURES, index=X_all.index)
-raw_shap = explainer.shap_values(X_imputed_df)
+explainer = shap.TreeExplainer(model)
+raw_shap = explainer.shap_values(X_all)
 
 if isinstance(raw_shap, list):
     shap_vals = raw_shap[1]
