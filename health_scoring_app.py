@@ -1,40 +1,49 @@
 # ============================================================
-# PM-FACING ACCOUNT HEALTH SCORING TOOL
-# Predictive Health Scoring for Product-Led Expansion
-# ============================================================
-# Run locally with:  streamlit run health_scoring_app.py
-# Deploy free at:     https://share.streamlit.io  (connect this
-#                      file via a GitHub repo, no server needed)
+# PM-FACING ACCOUNT HEALTH & RISK-PRIORITISATION TOOL
+# Account-level, temporally-windowed churn risk assessment
+# with SHAP-based interpretability.
 #
-# Expects five CSVs in the RavenStack schema:
-#   accounts.csv, subscriptions.csv, feature_usage.csv,
-#   support_tickets.csv, churn_events.csv
-# A PM at another company can upload their own CSVs in this same
-# shape and get scored results without touching any code.
+# This tool is a DECISION-SUPPORT system, not an automated
+# churn-detection system. Predictions should be combined with
+# PM/Customer Success judgement, not treated as certainties.
+#
+# Run locally:   streamlit run pm_health_tool.py
+# Deploy free:   push to GitHub, then deploy via share.streamlit.io
+# ============================================================
 
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import xgboost as xgb
 import shap
 import warnings
-warnings.filterwarnings('ignore')
+warnings.filterwarnings("ignore")
 
-from sklearn.model_selection import GroupShuffleSplit
-from imblearn.over_sampling import SMOTE
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestClassifier
 
 RANDOM_STATE = 42
-st.set_page_config(page_title="Account Health Scoring", layout="wide")
+
+st.set_page_config(
+    page_title="Account Health & Risk Prioritisation",
+    layout="wide"
+)
+
+FINAL_FEATURES = [
+    "account_age_days",
+    "subscription_tenure_days",
+    "days_since_latest_subscription_start"
+]
 
 # ============================================================
-# SIDEBAR - DATA INPUT
+# SIDEBAR - DATA INPUT AND PARAMETERS
 # ============================================================
-st.sidebar.title("Data Input")
+st.sidebar.title("Data & Settings")
+
 use_demo = st.sidebar.checkbox("Use bundled demo data (RavenStack)", value=True)
 
 if use_demo:
-    st.sidebar.info("Using demo data. Uncheck to upload your own CSVs.")
     accounts_file = "ravenstack_accounts.csv"
     subs_file = "ravenstack_subscriptions.csv"
     usage_file = "ravenstack_feature_usage.csv"
@@ -47,260 +56,265 @@ else:
     support_file = st.sidebar.file_uploader("support_tickets.csv", type="csv")
     churn_file = st.sidebar.file_uploader("churn_events.csv", type="csv")
 
-    required = [accounts_file, subs_file, usage_file, support_file, churn_file]
-    if not all(required):
-        st.title("Account Health Scoring Tool")
-        st.warning("Upload all five CSVs in the sidebar to begin, or "
-                   "check 'Use bundled demo data' to try it with the "
-                   "sample dataset.")
+    if not all([accounts_file, subs_file, usage_file, support_file, churn_file]):
+        st.title("Account Health & Risk Prioritisation Tool")
+        st.warning("Upload all five CSVs in the sidebar, or check "
+                   "'Use bundled demo data'.")
         st.stop()
 
+st.sidebar.markdown("---")
+st.sidebar.subheader("Prediction Window")
+
+cutoff_date = st.sidebar.date_input(
+    "Prediction cutoff date",
+    value=pd.Timestamp("2024-09-30")
+)
+cutoff_date = pd.Timestamp(cutoff_date)
+
+lookback_days = st.sidebar.number_input(
+    "Lookback window (days)", min_value=30, max_value=365, value=90
+)
+
+st.sidebar.caption(
+    "Default values match the dissertation's frozen specification "
+    "(cutoff 30 Sept 2024, 90-day lookback). Changing these "
+    "re-derives the account population and predictions live."
+)
+
 # ============================================================
-# DATA LOADING & PREP (cached so it only reruns when inputs change)
+# DATA CONSTRUCTION (cached, matches the dissertation pipeline)
 # ============================================================
 @st.cache_data
-def load_and_prepare(accounts_f, subs_f, usage_f, support_f, churn_f):
-    accounts = pd.read_csv(accounts_f)
-    subscriptions = pd.read_csv(subs_f)
-    feature_usage = pd.read_csv(usage_f)
-    support = pd.read_csv(support_f)
-    churn_events = pd.read_csv(churn_f)
+def build_account_dataset(accounts_f, subs_f, usage_f, support_f, churn_f,
+                            cutoff, lookback):
+    accounts = pd.read_csv(accounts_f, parse_dates=["signup_date"])
+    subscriptions = pd.read_csv(subs_f, parse_dates=["start_date", "end_date"])
+    feature_usage = pd.read_csv(usage_f, parse_dates=["usage_date"])
+    support = pd.read_csv(support_f, parse_dates=["submitted_at", "closed_at"])
+    churn_events = pd.read_csv(churn_f, parse_dates=["churn_date"])
 
-    # --- Aggregate to subscription/account level ---
-    usage_agg = feature_usage.groupby('subscription_id').agg(
-        total_usage_count=('usage_count', 'sum'),
-        total_usage_duration=('usage_duration_secs', 'sum'),
-        total_errors=('error_count', 'sum'),
-        unique_features_used=('feature_name', 'nunique'),
-        avg_usage_per_session=('usage_count', 'mean')
+    lookback_start = cutoff - pd.Timedelta(days=lookback)
+
+    # --- Active accounts at cutoff ---
+    active_subs = subscriptions[
+        (subscriptions["start_date"] <= cutoff) &
+        (subscriptions["end_date"].isna() | (subscriptions["end_date"] >= cutoff))
+    ].copy()
+    active_account_ids = active_subs["account_id"].dropna().unique()
+
+    # --- Lifecycle dates ---
+    sub_dates = active_subs.groupby("account_id").agg(
+        first_subscription_date=("start_date", "min"),
+        latest_subscription_start=("start_date", "max")
     ).reset_index()
+    sub_dates["subscription_tenure_days"] = (
+        cutoff - sub_dates["first_subscription_date"]
+    ).dt.days
+    sub_dates["days_since_latest_subscription_start"] = (
+        cutoff - sub_dates["latest_subscription_start"]
+    ).dt.days
 
-    support_agg = support.groupby('account_id').agg(
-        total_tickets=('ticket_id', 'count'),
-        avg_resolution_hours=('resolution_time_hours', 'mean'),
-        avg_satisfaction=('satisfaction_score', 'mean'),
-        escalation_count=('escalation_flag', 'sum')
-    ).reset_index()
+    # --- Build master account table ---
+    master = accounts[accounts["account_id"].isin(active_account_ids)].copy()
+    master["account_age_days"] = (cutoff - master["signup_date"]).dt.days
+    master = master.merge(
+        sub_dates[["account_id", "subscription_tenure_days",
+                   "days_since_latest_subscription_start"]],
+        on="account_id", how="left"
+    )
 
-    churn_agg = churn_events.groupby('account_id').agg(
-        churn_event_count=('churn_event_id', 'count')
-    ).reset_index()
+    # --- Future churn target (only computable if cutoff allows a look-ahead
+    #     within the available data; used for historical evaluation display) ---
+    prediction_end = cutoff + pd.Timedelta(days=lookback)
+    future_churn = churn_events[
+        (churn_events["churn_date"] > cutoff) &
+        (churn_events["churn_date"] <= prediction_end) &
+        (~churn_events["is_reactivation"]) &
+        (churn_events["account_id"].isin(active_account_ids))
+    ].copy()
+    future_target = future_churn.groupby("account_id").size().reset_index(
+        name="future_churn_event_count"
+    )
+    future_target["target_future_churn"] = 1
+    master = master.merge(
+        future_target[["account_id", "target_future_churn"]],
+        on="account_id", how="left"
+    )
+    master["target_future_churn"] = master["target_future_churn"].fillna(0).astype(int)
 
-    sub_usage = subscriptions.merge(usage_agg, on='subscription_id', how='left')
-    master = accounts.merge(sub_usage, on='account_id', how='left')
-    master = master.merge(support_agg, on='account_id', how='left')
-    master = master.merge(churn_agg, on='account_id', how='left')
-
-    master.columns = master.columns.str.replace(r'_x$', '', regex=True) \
-                                     .str.replace(r'_y$', '_sub', regex=True)
-    if 'churn_flag' not in master.columns and 'churn_flag_sub' in master.columns:
-        master['churn_flag'] = master['churn_flag_sub']
-    master['churn_flag'] = master['churn_flag'].astype(int)
-
-    df = master.copy()
-    leak_cols = ['churn_event_count', 'account_id', 'subscription_id',
-                 'account_name', 'signup_date', 'start_date', 'end_date',
-                 'arr_amount']
-    leak_cols = [c for c in leak_cols if c in df.columns]
-
-    # Structural-zero and median imputation
-    for col in ['total_usage_count', 'total_usage_duration', 'total_errors',
-                'unique_features_used', 'avg_usage_per_session']:
-        if col in df.columns:
-            df[col] = df[col].fillna(0)
-    for col in ['avg_satisfaction', 'avg_resolution_hours']:
-        if col in df.columns:
-            df[col] = df[col].fillna(df[col].median())
-
-    # Tenure engineering
-    if 'signup_date' in master.columns:
-        df['signup_date'] = pd.to_datetime(master['signup_date'], errors='coerce')
-        df['start_date'] = pd.to_datetime(master['start_date'], errors='coerce')
-        ref_date = df['start_date'].max()
-        df['account_age_days'] = (ref_date - df['signup_date']).dt.days
-        df['subscription_tenure_days'] = (ref_date - df['start_date']).dt.days
-        for col in ['account_age_days', 'subscription_tenure_days']:
-            df[col] = df[col].fillna(df[col].median())
-
-    if 'active_subscription' not in df.columns and 'end_date' in master.columns:
-        df['active_subscription'] = master['end_date'].isnull().astype(int)
-
-    for col in df.select_dtypes(include='number').columns:
-        if df[col].isnull().sum() > 0:
-            df[col] = df[col].fillna(df[col].median())
-
-    categorical_cols = [c for c in df.select_dtypes(include='object').columns
-                         if c not in leak_cols]
-    df_encoded = pd.get_dummies(df, columns=categorical_cols, drop_first=True)
-
-    feature_cols = [c for c in df_encoded.columns
-                     if c not in leak_cols + ['churn_flag']]
-
-    X = df_encoded[feature_cols]
-    y = df_encoded['churn_flag']
-    groups = master['account_id'] if 'account_id' in master.columns else None
-    mrr_col = 'mrr_amount' if 'mrr_amount' in master.columns else None
-
-    return master, X, y, groups, mrr_col
+    return master, active_account_ids
 
 
-with st.spinner("Loading and preparing data..."):
-    master, X, y, groups, mrr_col = load_and_prepare(
-        accounts_file, subs_file, usage_file, support_file, churn_file
+with st.spinner("Building account-level dataset for the selected cutoff..."):
+    master, active_ids = build_account_dataset(
+        accounts_file, subs_file, usage_file, support_file, churn_file,
+        cutoff_date, lookback_days
     )
 
 # ============================================================
-# MODEL TRAINING (cached)
+# MODEL: FROZEN RANDOM FOREST SPECIFICATION (refit on full population)
 # ============================================================
 @st.cache_resource
-def train_model(X, y, groups):
-    if groups is not None:
-        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=RANDOM_STATE)
-        train_idx, test_idx = next(gss.split(X, y, groups=groups))
-    else:
-        from sklearn.model_selection import train_test_split
-        train_idx, test_idx = train_test_split(
-            np.arange(len(X)), test_size=0.2, stratify=y, random_state=RANDOM_STATE
-        )
+def fit_frozen_model(master_df):
+    X = master_df[FINAL_FEATURES]
+    y = master_df["target_future_churn"]
 
-    X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-    smote = SMOTE(random_state=RANDOM_STATE)
-    X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
-
-    model = xgb.XGBClassifier(
-        objective='binary:logistic', eval_metric='logloss',
-        n_estimators=200, max_depth=6, learning_rate=0.1,
-        subsample=0.8, colsample_bytree=0.8,
-        random_state=RANDOM_STATE
-    )
-    model.fit(X_train_res, y_train_res)
-
-    from sklearn.metrics import roc_auc_score, average_precision_score
-    y_proba_test = model.predict_proba(X_test)[:, 1]
-    metrics = {
-        'roc_auc': roc_auc_score(y_test, y_proba_test),
-        'pr_auc': average_precision_score(y_test, y_proba_test)
-    }
-    return model, metrics
+    pipe = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
+        ("model", RandomForestClassifier(
+            n_estimators=300, max_depth=3,
+            random_state=RANDOM_STATE, n_jobs=-1
+        ))
+    ])
+    pipe.fit(X, y)
+    return pipe
 
 
-with st.spinner("Training model..."):
-    model, metrics = train_model(X, y, groups)
+model = fit_frozen_model(master)
 
-explainer = shap.TreeExplainer(model)
-churn_proba = model.predict_proba(X)[:, 1]
+X_all = master[FINAL_FEATURES]
+churn_proba = model.predict_proba(X_all)[:, 1]
 
 scored = master.copy()
-scored['health_score'] = 1 - churn_proba
-scored['churn_probability'] = churn_proba
+scored["churn_probability"] = churn_proba
+scored["health_score"] = (1 - churn_proba) * 100
 
-if mrr_col:
-    health_med = scored['health_score'].median()
-    mrr_med = scored[mrr_col].median()
+def risk_band(p):
+    if p >= 0.40:
+        return "Critical"
+    elif p >= 0.30:
+        return "High"
+    elif p >= 0.20:
+        return "Moderate"
+    else:
+        return "Low"
 
-    def quadrant(row):
-        if row['churn_flag'] == 1:
-            return 'Lost'
-        hi_health = row['health_score'] >= health_med
-        hi_mrr = row[mrr_col] >= mrr_med
-        if hi_health:
-            return 'Healthy'
-        return 'Critical' if hi_mrr else 'At Risk'
+scored["risk_band"] = scored["churn_probability"].apply(risk_band)
 
-    scored['quadrant'] = scored.apply(quadrant, axis=1)
+action_map = {
+    "Critical": "High-priority customer-success review recommended",
+    "High": "Proactive outreach recommended",
+    "Moderate": "Monitor; consider light-touch engagement",
+    "Low": "No immediate action indicated"
+}
+scored["recommended_action"] = scored["risk_band"].map(action_map)
+
+explainer = shap.TreeExplainer(model.named_steps["model"])
+X_imputed = model.named_steps["imputer"].transform(X_all)
+X_imputed_df = pd.DataFrame(X_imputed, columns=FINAL_FEATURES, index=X_all.index)
+raw_shap = explainer.shap_values(X_imputed_df)
+
+if isinstance(raw_shap, list):
+    shap_vals = raw_shap[1]
+elif isinstance(raw_shap, np.ndarray) and raw_shap.ndim == 3:
+    shap_vals = raw_shap[:, :, 1]
+else:
+    shap_vals = raw_shap
 
 # ============================================================
 # MAIN UI
 # ============================================================
-st.title("Account Health Scoring Dashboard")
-st.caption("Predictive Health Scoring for Product-Led Expansion")
+st.title("Account Health & Risk Prioritisation")
 
-col1, col2, col3 = st.columns(3)
-col1.metric("Accounts Scored", f"{len(scored):,}")
-col2.metric("Model AUC-ROC", f"{metrics['roc_auc']:.3f}")
-col3.metric("Model PR-AUC", f"{metrics['pr_auc']:.3f}")
+st.info(
+    "**This tool is a decision-support system, not an automated "
+    "churn-detection system.** Predicted risk reflects modest, "
+    "interpretable statistical signal from account lifecycle "
+    "information. A high or low prediction is not proof an account "
+    "will or will not churn — use this alongside your own knowledge "
+    "of each account, not as a replacement for it."
+)
 
-tab1, tab2 = st.tabs(["Portfolio Overview", "Account Lookup"])
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Active accounts", f"{len(scored):,}")
+col2.metric("Critical", int((scored["risk_band"] == "Critical").sum()))
+col3.metric("High", int((scored["risk_band"] == "High").sum()))
+col4.metric("Avg. predicted risk", f"{scored['churn_probability'].mean()*100:.1f}%")
 
-# --- TAB 1: Portfolio quadrant view ---
+tab1, tab2 = st.tabs(["Portfolio Overview", "Account Investigation"])
+
+# --- TAB 1: Portfolio-level view ---
 with tab1:
-    st.subheader("Health Quadrants")
+    st.subheader("Which accounts require attention?")
 
-    if mrr_col:
-        quad_counts = scored['quadrant'].value_counts()
-        qcols = st.columns(4)
-        colors = {'Healthy': '#2E86AB', 'At Risk': '#F4A261',
-                  'Critical': '#E84855', 'Lost': '#6B6B6B'}
-        for i, q in enumerate(['Healthy', 'At Risk', 'Critical', 'Lost']):
-            qcols[i].metric(q, int(quad_counts.get(q, 0)))
+    band_order = ["Critical", "High", "Moderate", "Low"]
+    band_counts = scored["risk_band"].value_counts().reindex(band_order).fillna(0)
 
-        fig, ax = plt.subplots(figsize=(9, 6))
-        for q, color in colors.items():
-            subset = scored[scored['quadrant'] == q]
-            ax.scatter(subset['health_score'], subset[mrr_col],
-                       label=q, alpha=0.5, s=20, color=color)
-        ax.axvline(health_med, color='grey', linestyle='--', alpha=0.5)
-        ax.axhline(mrr_med, color='grey', linestyle='--', alpha=0.5)
-        ax.set_xlabel('Health Score (1 - churn probability)')
-        ax.set_ylabel('MRR (USD)')
-        ax.legend()
-        st.pyplot(fig)
+    fig, ax = plt.subplots(figsize=(8, 4))
+    colors = {"Critical": "#E84855", "High": "#F4A261",
+              "Moderate": "#F9C74F", "Low": "#2E86AB"}
+    ax.bar(band_counts.index, band_counts.values,
+           color=[colors[b] for b in band_counts.index])
+    ax.set_ylabel("Number of accounts")
+    ax.set_title("Accounts by Risk Band")
+    st.pyplot(fig)
 
-        st.subheader("Critical Accounts (highest priority for outreach)")
-        critical = scored[scored['quadrant'] == 'Critical'].sort_values(
-            mrr_col, ascending=False
-        )
-        display_cols = [c for c in ['account_id', 'health_score', mrr_col,
-                                     'quadrant'] if c in critical.columns]
-        st.dataframe(critical[display_cols].head(20), use_container_width=True)
-    else:
-        st.warning("mrr_amount column not found - quadrant view needs MRR data.")
+    st.subheader("Accounts ranked by predicted risk")
+    st.caption(
+        "Ranking-based prioritisation lets a PM review a fixed number "
+        "of highest-risk accounts, rather than relying only on a fixed "
+        "probability threshold."
+    )
 
-# --- TAB 2: Per-account lookup ---
+    display_cols = ["account_id", "churn_probability", "health_score",
+                     "risk_band", "recommended_action"] + FINAL_FEATURES
+    display_cols = [c for c in display_cols if c in scored.columns]
+
+    ranked = scored[display_cols].sort_values(
+        "churn_probability", ascending=False
+    ).reset_index(drop=True)
+    ranked["churn_probability"] = (ranked["churn_probability"] * 100).round(1)
+    ranked["health_score"] = ranked["health_score"].round(1)
+
+    top_n = st.slider("Show top N highest-risk accounts", 5, min(100, len(ranked)), 20)
+    st.dataframe(ranked.head(top_n), use_container_width=True)
+
+# --- TAB 2: Per-account investigation ---
 with tab2:
-    st.subheader("Look up an account")
+    st.subheader("Why has this account been assigned its current risk level?")
 
-    account_ids = master['account_id'].unique().tolist() if 'account_id' in master.columns else []
-    selected = st.selectbox("Select account_id", account_ids)
+    account_ids = master["account_id"].unique().tolist()
+    selected = st.selectbox("Select an account", account_ids)
 
     if selected:
-        idx = master.index[master['account_id'] == selected][0]
+        idx = master.index[master["account_id"] == selected][0]
         row = scored.loc[idx]
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Health Score", f"{row['health_score']:.3f}")
-        c2.metric("Churn Probability", f"{row['churn_probability']:.3f}")
-        if mrr_col:
-            c3.metric("MRR", f"${row[mrr_col]:,.0f}")
-        st.write(f"**Quadrant:** {row.get('quadrant', 'N/A')}")
+        c1.metric("Predicted churn probability", f"{row['churn_probability']*100:.1f}%")
+        c2.metric("Health score", f"{row['health_score']:.1f} / 100")
+        c3.metric("Risk band", row["risk_band"])
 
-        # Live SHAP explanation for this account
-        account_features = X.iloc[[idx]]
-        exp = explainer(account_features)
-        vals = exp.values[0]
-        if np.ndim(vals) > 1:
-            vals = vals[:, 1]
+        st.write(f"**Recommended next step:** {row['recommended_action']}")
 
-        contrib = pd.Series(vals, index=X.columns)
+        st.markdown("---")
+        st.write("**Account lifecycle information used by the model:**")
+        info_cols = st.columns(3)
+        info_cols[0].metric("Account age (days)", f"{row['account_age_days']:.0f}")
+        info_cols[1].metric("Subscription tenure (days)",
+                             f"{row['subscription_tenure_days']:.0f}")
+        info_cols[2].metric("Days since latest subscription start",
+                             f"{row['days_since_latest_subscription_start']:.0f}")
 
-        # Only show categorical dummies that are TRUE (=1) for this account,
-        # e.g. show "country_UK" not "country_US" for a UK-based account.
-        # Numeric features are always kept.
-        account_row = account_features.iloc[0]
-        keep = [f for f in contrib.index
-                if account_row[f] != 0 or '_' not in f]
-        contrib = contrib[keep].sort_values(key=abs, ascending=False).head(10)
+        st.markdown("---")
+        st.subheader("Why: factors contributing to this prediction")
 
-        st.subheader("Top factors driving this account's risk score")
-        fig, ax = plt.subplots(figsize=(8, 5))
-        colors_bar = ['#E84855' if v > 0 else '#2E86AB' for v in contrib.values]
-        ax.barh(contrib.index[::-1], contrib.values[::-1], color=colors_bar[::-1])
-        ax.set_xlabel('SHAP value (positive = increases churn risk)')
-        ax.axvline(0, color='black', linewidth=0.8)
+        pos_in_array = master.index.get_loc(idx)
+        contrib = pd.Series(
+            shap_vals[pos_in_array], index=FINAL_FEATURES
+        ).sort_values(key=abs, ascending=False)
+
+        fig, ax = plt.subplots(figsize=(7, 3))
+        bar_colors = ["#E84855" if v > 0 else "#2E86AB" for v in contrib.values]
+        ax.barh(contrib.index[::-1], contrib.values[::-1], color=bar_colors[::-1])
+        ax.axvline(0, color="black", linewidth=0.8)
+        ax.set_xlabel("SHAP value (positive = increases predicted risk)")
         st.pyplot(fig)
 
-        st.caption("Red bars increase churn risk, blue bars decrease it. "
-                   "Magnitude shows the strength of each factor's influence "
-                   "on this specific account's prediction.")
+        st.caption(
+            "These values show each factor's contribution to this "
+            "account's specific prediction, not a causal explanation. "
+            "A factor increasing predicted risk does not mean changing "
+            "it would prevent churn — use this to guide investigation, "
+            "not as a prescribed intervention."
+        )
