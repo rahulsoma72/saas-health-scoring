@@ -152,32 +152,64 @@ with st.spinner("Building account-level dataset for the selected cutoff..."):
     )
 
 # ============================================================
-# MODEL: FROZEN RANDOM FOREST SPECIFICATION (refit on full population)
+# MODEL: LOAD THE ACTUAL FROZEN DISSERTATION MODEL
+# This is the exact model trained on 332 training accounts and
+# evaluated once on the untouched 83-account test set. It is
+# loaded here, not refit, so predictions genuinely come from
+# the model reported and evaluated in the dissertation.
 # ============================================================
-@st.cache_resource
-def fit_frozen_model(master_df):
-    X = master_df[FINAL_FEATURES]
-    y = master_df["target_future_churn"]
+import os
+import joblib
+import json
 
-    pipe = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("model", RandomForestClassifier(
-            n_estimators=300, max_depth=3,
-            random_state=RANDOM_STATE, n_jobs=-1
-        ))
-    ])
-    pipe.fit(X, y)
-    return pipe
+FROZEN_MODEL_PATH = "ravenstack_frozen_model.joblib"
+FROZEN_METADATA_PATH = "ravenstack_frozen_model_metadata.json"
 
+frozen_model_loaded = os.path.exists(FROZEN_MODEL_PATH)
 
-model = fit_frozen_model(master)
+if frozen_model_loaded:
+    model = joblib.load(FROZEN_MODEL_PATH)
+    with open(FROZEN_METADATA_PATH) as f:
+        model_metadata = json.load(f)
+else:
+    st.warning(
+        "⚠️ Frozen dissertation model file "
+        f"('{FROZEN_MODEL_PATH}') not found in this deployment. "
+        "Falling back to fitting a model on the currently loaded "
+        "data — **this is NOT the frozen model evaluated in the "
+        "dissertation** and should not be described as such. "
+        "To use the actual frozen model, run save_frozen_model.py "
+        "in Colab after your main pipeline and include both output "
+        "files alongside this app."
+    )
+
+    @st.cache_resource
+    def fit_fallback_model(master_df):
+        X = master_df[FINAL_FEATURES]
+        y = master_df["target_future_churn"]
+        pipe = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
+            ("model", RandomForestClassifier(
+                n_estimators=300, max_depth=3,
+                random_state=RANDOM_STATE, n_jobs=-1
+            ))
+        ])
+        pipe.fit(X, y)
+        return pipe
+
+    model = fit_fallback_model(master)
+    model_metadata = None
 
 X_all = master[FINAL_FEATURES]
 churn_proba = model.predict_proba(X_all)[:, 1]
 
 scored = master.copy()
 scored["churn_probability"] = churn_proba
-scored["health_score"] = (1 - churn_proba) * 100
+# This is a model-derived health score: simply the inverse of the
+# predicted churn probability, expressed on a 0-100 scale for
+# readability. It is not an independently validated health metric -
+# stated explicitly here and in the UI caption below.
+scored["model_derived_health_score"] = (1 - churn_proba) * 100
 
 def risk_band(p):
     if p >= 0.40:
@@ -192,10 +224,10 @@ def risk_band(p):
 scored["risk_band"] = scored["churn_probability"].apply(risk_band)
 
 action_map = {
-    "Critical": "High-priority customer-success review recommended",
-    "High": "Proactive outreach recommended",
-    "Moderate": "Monitor; consider light-touch engagement",
-    "Low": "No immediate action indicated"
+    "Critical": "🔴 Prioritise for immediate account review",
+    "High": "🟠 Prioritise for proactive engagement",
+    "Moderate": "🟡 Monitor account health and engagement",
+    "Low": "🟢 Continue routine monitoring"
 }
 scored["recommended_action"] = scored["risk_band"].map(action_map)
 
@@ -215,6 +247,14 @@ else:
 # MAIN UI
 # ============================================================
 st.title("Account Health & Risk Prioritisation")
+
+if frozen_model_loaded:
+    st.success(
+        f"✅ Using the frozen dissertation model ({model_metadata['model_type']}, "
+        f"trained on {model_metadata['trained_on_n_accounts']} accounts, "
+        f"test ROC-AUC = {model_metadata['test_roc_auc']:.4f}). "
+        f"Predictions below come from this exact evaluated model."
+    )
 
 st.info(
     "**This tool is a decision-support system, not an automated "
@@ -256,7 +296,7 @@ with tab1:
         "probability threshold."
     )
 
-    display_cols = ["account_id", "churn_probability", "health_score",
+    display_cols = ["account_id", "churn_probability", "model_derived_health_score",
                      "risk_band", "recommended_action"] + FINAL_FEATURES
     display_cols = [c for c in display_cols if c in scored.columns]
 
@@ -264,7 +304,11 @@ with tab1:
         "churn_probability", ascending=False
     ).reset_index(drop=True)
     ranked["churn_probability"] = (ranked["churn_probability"] * 100).round(1)
-    ranked["health_score"] = ranked["health_score"].round(1)
+    ranked["model_derived_health_score"] = ranked["model_derived_health_score"].round(1)
+    ranked = ranked.rename(columns={
+        "churn_probability": "churn_probability_pct",
+        "model_derived_health_score": "health_score_0_100"
+    })
 
     top_n = st.slider("Show top N highest-risk accounts", 5, min(100, len(ranked)), 20)
     st.dataframe(ranked.head(top_n), use_container_width=True)
@@ -282,10 +326,16 @@ with tab2:
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Predicted churn probability", f"{row['churn_probability']*100:.1f}%")
-        c2.metric("Health score", f"{row['health_score']:.1f} / 100")
+        c2.metric("Health score", f"{row['model_derived_health_score']:.1f} / 100")
         c3.metric("Risk band", row["risk_band"])
+        st.caption(
+            "The health score is a model-derived score: simply "
+            "100 minus the predicted churn probability, expressed on "
+            "a 0-100 scale for readability. It is not an independently "
+            "validated health metric."
+        )
 
-        st.write(f"**Recommended next step:** {row['recommended_action']}")
+        st.write(f"**Suggested action:** {row['recommended_action']}")
 
         st.markdown("---")
         st.write("**Account lifecycle information used by the model:**")
