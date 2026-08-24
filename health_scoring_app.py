@@ -1102,10 +1102,6 @@ with tab2:
             f"{row['days_since_latest_subscription_start']:.0f}"
         )
 
-
-        st.markdown("---")
-
-
         # ----------------------------------------------------
         # HEALTH SCORE EXPLANATION
         # ----------------------------------------------------
@@ -1121,6 +1117,11 @@ with tab2:
                 "It is not an independently validated health "
                 "metric."
             )
+        
+        st.markdown("---")
+
+
+
 
 
         # ----------------------------------------------------
