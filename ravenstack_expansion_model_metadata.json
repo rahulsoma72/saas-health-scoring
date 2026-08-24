@@ -1,0 +1,20 @@
+{
+  "model_type": "Logistic Regression",
+  "target": "future_upgrade_within_90_days",
+  "features": [
+    "account_age_days",
+    "subscription_tenure_days",
+    "days_since_latest_subscription_start"
+  ],
+  "training_accounts": 332,
+  "eligible_accounts": 415,
+  "positive_accounts": 109,
+  "negative_accounts": 306,
+  "expansion_rate": 0.2627,
+  "training_cv_roc_auc": 0.6386,
+  "fresh_holdout_roc_auc": 0.7481,
+  "fresh_holdout_pr_auc": 0.608,
+  "fresh_holdout_f1": 0.5246,
+  "prediction_horizon_days": 90,
+  "model_status": "frozen_final_expansion_model"
+}
