@@ -550,6 +550,64 @@ scored["expansion_opportunity"] = (
     .apply(expansion_band)
 )
 
+# ============================================================
+# TEMPORARY EXPANSION BAND DIAGNOSTIC
+# ============================================================
+
+exp_p = scored["expansion_probability"]
+
+st.write("### Temporary expansion probability diagnostic")
+
+st.write({
+    "Accounts scored": len(exp_p),
+    "Mean": round(exp_p.mean(), 4),
+    "Median": round(exp_p.median(), 4),
+    "Minimum": round(exp_p.min(), 4),
+    "25th percentile": round(exp_p.quantile(0.25), 4),
+    "75th percentile": round(exp_p.quantile(0.75), 4),
+    "Maximum": round(exp_p.max(), 4),
+})
+
+diagnostic_counts = pd.DataFrame({
+    "Opportunity band": [
+        "High (≥40%)",
+        "Moderate (25%–<40%)",
+        "Low (<25%)"
+    ],
+    "Accounts": [
+        (exp_p >= 0.40).sum(),
+        ((exp_p >= 0.25) & (exp_p < 0.40)).sum(),
+        (exp_p < 0.25).sum()
+    ]
+})
+
+diagnostic_counts["Percentage"] = (
+    diagnostic_counts["Accounts"] /
+    len(exp_p) * 100
+).round(1)
+
+st.dataframe(
+    diagnostic_counts,
+    hide_index=True,
+    use_container_width=True
+)
+
+st.write(
+    "Top 10 expansion probabilities:"
+)
+
+st.dataframe(
+    scored[
+        ["account_id", "expansion_probability"]
+    ]
+    .sort_values(
+        "expansion_probability",
+        ascending=False
+    )
+    .head(10),
+    hide_index=True,
+    use_container_width=True
+)
 
 # ============================================================
 # COMBINED PM ACTION
