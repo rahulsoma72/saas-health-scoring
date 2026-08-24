@@ -37,59 +37,6 @@ st.set_page_config(
 
 
 # ============================================================
-# HOVER INFORMATION
-# ============================================================
-
-DECISION_SUPPORT_INFO = (
-    "Decision-support prototype developed for the RavenStack dissertation. "
-    "Churn and expansion models are separate frozen predictive models. "
-    "Model outputs should support, not replace, Product Management and "
-    "Customer Success judgement."
-)
-
-EXPANSION_INFO = (
-    "Expansion probability estimates the model's statistical signal for "
-    "a future account upgrade within 90 days. It is a prioritisation "
-    "signal, not a guarantee of expansion."
-)
-
-
-def hover_info(text, label="ⓘ"):
-    safe_text = (
-        str(text)
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-    st.markdown(
-        '<span title="' + safe_text + '" '
-        'style="font-size:0.95rem;color:#9aa0a6;cursor:help;">'
-        + label +
-        '</span>',
-        unsafe_allow_html=True
-    )
-
-
-def right_hover_info(text, label="ⓘ"):
-    safe_text = (
-        str(text)
-        .replace("&", "&amp;")
-        .replace('"', "&quot;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
-    st.markdown(
-        '<div style="text-align:right;margin-top:-2.2rem;margin-bottom:0.35rem;">'
-        '<span title="' + safe_text + '" '
-        'style="font-size:0.95rem;color:#9aa0a6;cursor:help;">'
-        + label +
-        '</span></div>',
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
 # MODEL CONFIGURATION
 # ============================================================
 
@@ -882,8 +829,6 @@ with tab1:
     st.subheader(
         "Which accounts require attention?"
     )
-    right_hover_info(DECISION_SUPPORT_INFO)
-
     band_order = [
         "Critical",
         "High",
@@ -1024,6 +969,17 @@ with tab1:
     )
 
 
+    st.markdown("---")
+
+    st.caption(
+        "Decision-support prototype developed for the RavenStack dissertation. "
+        "Churn and expansion models are separate frozen predictive models. "
+        "Model outputs should support, not replace, Product Management and "
+        "Customer Success judgement."
+    )
+
+
+
 # ============================================================
 # TAB 2 — ACCOUNT INVESTIGATION
 # ============================================================
@@ -1033,8 +989,6 @@ with tab2:
     st.subheader(
         "Account-level investigation"
     )
-    right_hover_info(DECISION_SUPPORT_INFO)
-
 
     account_ids = (
         master["account_id"]
@@ -1079,15 +1033,11 @@ with tab2:
                 "#### Retention"
             )
 
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3 = st.columns([1.0, 1.35, 1.0])
 
             c1.metric(
                 "Churn probability",
-                f"{row['churn_probability']*100:.1f}%",
-                help=(
-                    "Predicted probability of future churn from "
-                    "the frozen dissertation Random Forest."
-                )
+                f"{row['churn_probability']*100:.1f}%"
             )
 
             c2.metric(
@@ -1097,12 +1047,7 @@ with tab2:
 
             c3.metric(
                 "Risk band",
-                row["risk_band"],
-                help=(
-                    "Churn-risk bands: Critical ≥40%; High 30%–<40%; "
-                    "Moderate 20%–<30%; Low <20%. These are "
-                    "decision-support categories, not guarantees."
-                )
+                row["risk_band"]
             )
 
         with gap:
@@ -1118,22 +1063,12 @@ with tab2:
 
             c1.metric(
                 "Expansion probability",
-                f"{row['expansion_probability']*100:.1f}%",
-                help=(
-                    "Predicted probability of a future account "
-                    "upgrade within 90 days from the frozen "
-                    "expansion Logistic Regression."
-                )
+                f"{row['expansion_probability']*100:.1f}%"
             )
 
             c2.metric(
                 "Opportunity",
-                row["expansion_opportunity"],
-                help=(
-                    "Expansion-opportunity bands: High ≥40%; "
-                    "Moderate 25%–<40%; Low <25%. These indicate "
-                    "prioritisation signal, not a guarantee."
-                )
+                row["expansion_opportunity"]
             )
 
         st.markdown(
@@ -1267,6 +1202,17 @@ with tab2:
 
 
 
+    st.markdown("---")
+
+    st.caption(
+        "Decision-support prototype developed for the RavenStack dissertation. "
+        "Churn and expansion models are separate frozen predictive models. "
+        "Model outputs should support, not replace, Product Management and "
+        "Customer Success judgement."
+    )
+
+
+
 # ============================================================
 # TAB 3 — EXPANSION OPPORTUNITIES
 # ============================================================
@@ -1276,12 +1222,18 @@ with tab3:
     st.subheader(
         "Which accounts show expansion opportunity?"
     )
-    right_hover_info(DECISION_SUPPORT_INFO)
-
-    hover_info(
-        EXPANSION_INFO,
-        label="ⓘ About expansion probability"
-    )
+    with st.expander(
+        "How expansion probability is calculated"
+    ):
+        st.write(
+            "Expansion probability is produced by the frozen "
+            "Logistic Regression model using account age, "
+            "subscription tenure, and days since the latest "
+            "subscription start. It represents the model's "
+            "statistical signal for a future account upgrade "
+            "within 90 days. It is a prioritisation signal, "
+            "not a guarantee of expansion."
+        )
 
 
     expansion_order = [
@@ -1455,5 +1407,11 @@ issues before expansion outreach.
 # ============================================================
 # FOOTER
 # ============================================================
-
 st.markdown("---")
+
+st.caption(
+    "Decision-support prototype developed for the RavenStack dissertation. "
+    "Churn and expansion models are separate frozen predictive models. "
+    "Model outputs should support, not replace, Product Management and "
+    "Customer Success judgement."
+)
