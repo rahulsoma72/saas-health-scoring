@@ -37,6 +37,59 @@ st.set_page_config(
 
 
 # ============================================================
+# HOVER INFORMATION
+# ============================================================
+
+DECISION_SUPPORT_INFO = (
+    "Decision-support prototype developed for the RavenStack dissertation. "
+    "Churn and expansion models are separate frozen predictive models. "
+    "Model outputs should support, not replace, Product Management and "
+    "Customer Success judgement."
+)
+
+EXPANSION_INFO = (
+    "Expansion probability estimates the model's statistical signal for "
+    "a future account upgrade within 90 days. It is a prioritisation "
+    "signal, not a guarantee of expansion."
+)
+
+
+def hover_info(text, label="ⓘ"):
+    safe_text = (
+        str(text)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    st.markdown(
+        '<span title="' + safe_text + '" '
+        'style="font-size:0.95rem;color:#9aa0a6;cursor:help;">'
+        + label +
+        '</span>',
+        unsafe_allow_html=True
+    )
+
+
+def right_hover_info(text, label="ⓘ"):
+    safe_text = (
+        str(text)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+    st.markdown(
+        '<div style="text-align:right;margin-top:-2.2rem;margin-bottom:0.35rem;">'
+        '<span title="' + safe_text + '" '
+        'style="font-size:0.95rem;color:#9aa0a6;cursor:help;">'
+        + label +
+        '</span></div>',
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
 # MODEL CONFIGURATION
 # ============================================================
 
@@ -560,47 +613,50 @@ def suggested_action(row):
     risk = row["risk_band"]
     opportunity = row["expansion_opportunity"]
 
-    if risk in ["Critical", "High"] and opportunity == "High":
-
+    if risk == "Critical" and opportunity == "High":
         return (
-            "🔴 Prioritise retention review before "
-            "pursuing expansion"
+            "🔴 Prioritise retention intervention and defer "
+            "expansion outreach until account health is stabilised."
+        )
+
+    if risk == "High" and opportunity == "High":
+        return (
+            "🔴 Address retention risk first; reassess expansion "
+            "once account health improves."
         )
 
     if risk == "Moderate" and opportunity == "High":
-
         return (
-            "🟠 Review account health before "
-            "expansion outreach"
+            "🟠 Review account health and engagement before "
+            "initiating expansion outreach."
         )
 
     if risk == "Low" and opportunity == "High":
-
         return (
-            "🟢 Prioritise expansion discovery discussion"
+            "🟢 Prioritise a targeted expansion conversation while "
+            "confirming continued account health."
         )
 
     if risk in ["Critical", "High"]:
-
         return (
-            "🔴 Prioritise proactive retention engagement"
+            "🔴 Prioritise proactive retention engagement and "
+            "investigate the main risk signals."
         )
 
     if opportunity == "Moderate":
-
         return (
-            "🟡 Monitor account health and assess "
-            "expansion fit"
+            "🟡 Assess expansion fit alongside account health "
+            "during routine account review."
         )
 
     if risk == "Moderate":
-
         return (
-            "🟡 Monitor account health and engagement"
+            "🟡 Monitor account health and engagement for "
+            "emerging retention concerns."
         )
 
     return (
-        "🟢 Continue routine monitoring"
+        "🟢 Continue routine monitoring and account engagement."
     )
 
 
@@ -646,6 +702,53 @@ else:
 # MAIN UI
 # ============================================================
 
+st.markdown(
+    """
+    <style>
+    .suggested-action-card {
+        border: 1px solid rgba(128, 128, 128, 0.35);
+        border-radius: 8px;
+        padding: 0.75rem 1rem;
+        margin-top: 0.9rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .suggested-action-label {
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+    }
+
+    .suggested-action-text {
+        line-height: 1.45;
+    }
+
+    .shap-title {
+        font-size: 1.5rem;
+        font-weight: 650;
+        margin-top: 0.3rem;
+        margin-bottom: 0.2rem;
+    }
+
+    .shap-info {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.05rem;
+        height: 1.05rem;
+        margin-left: 0.35rem;
+        border: 1px solid rgba(180, 180, 180, 0.65);
+        border-radius: 50%;
+        font-size: 0.72rem;
+        font-weight: 700;
+        cursor: help;
+        opacity: 0.8;
+        vertical-align: 0.08rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 st.title(
     "Account Health & Expansion Prioritisation"
 )
@@ -665,15 +768,7 @@ st.success(
 )
 
 
-st.info(
-    "**This tool is a decision-support system, not an "
-    "automated churn or expansion decision system.** "
-    "Predicted risk and expansion opportunity reflect "
-    "statistical signals from account lifecycle information. "
-    "A high or low prediction is not proof that an account "
-    "will churn or expand. Use these outputs alongside "
-    "account knowledge and professional judgement."
-)
+# Decision-support guidance is available through compact hover icons in each tab.
 
 
 # ------------------------------------------------------------
@@ -720,29 +815,42 @@ col1.metric(
 )
 
 col2.metric(
-    "Critical",
+    "Critical churn risk",
     int(
         (
             scored["risk_band"] ==
             "Critical"
         ).sum()
+    ),
+    help=(
+        "Critical churn-risk band: predicted churn probability "
+        "of 40% or higher."
     )
 )
 
 col3.metric(
-    "High",
+    "High churn risk",
     int(
         (
             scored["risk_band"] ==
             "High"
         ).sum()
+    ),
+    help=(
+        "High churn-risk band: predicted churn probability "
+        "from 30% to below 40%."
     )
 )
 
 col4.metric(
     "Avg. expansion probability",
-    f"{scored['expansion_probability'].mean()*100:.1f}%"
+    f"{scored['expansion_probability'].mean()*100:.1f}%",
+    help=(
+        "Average predicted probability of a future account "
+        "upgrade within the model's 90-day expansion horizon."
+    )
 )
+
 
 
 # ============================================================
@@ -767,6 +875,7 @@ with tab1:
     st.subheader(
         "Which accounts require attention?"
     )
+    right_hover_info(DECISION_SUPPORT_INFO)
 
     band_order = [
         "Critical",
@@ -917,6 +1026,7 @@ with tab2:
     st.subheader(
         "Account-level investigation"
     )
+    right_hover_info(DECISION_SUPPORT_INFO)
 
 
     account_ids = (
@@ -953,8 +1063,8 @@ with tab2:
         )
 
 
-        left, right = st.columns(2)
-
+        # A small central gap keeps Retention and Expansion visually distinct.
+        left, gap, right = st.columns([1, 0.20, 1])
 
         with left:
 
@@ -966,19 +1076,34 @@ with tab2:
 
             c1.metric(
                 "Churn probability",
-                f"{row['churn_probability']*100:.1f}%"
+                f"{row['churn_probability']*100:.1f}%",
+                help=(
+                    "Predicted probability of future churn from "
+                    "the frozen dissertation Random Forest."
+                )
             )
 
             c2.metric(
                 "Health score",
-                f"{row['model_derived_health_score']:.1f} / 100"
+                f"{row['model_derived_health_score']:.1f} / 100",
+                help=(
+                    "Model-derived score calculated as "
+                    "100 minus predicted churn probability."
+                )
             )
 
             c3.metric(
                 "Risk band",
-                row["risk_band"]
+                row["risk_band"],
+                help=(
+                    "Churn-risk bands: Critical ≥40%; High 30%–<40%; "
+                    "Moderate 20%–<30%; Low <20%. These are "
+                    "decision-support categories, not guarantees."
+                )
             )
 
+        with gap:
+            st.empty()
 
         with right:
 
@@ -990,19 +1115,34 @@ with tab2:
 
             c1.metric(
                 "Expansion probability",
-                f"{row['expansion_probability']*100:.1f}%"
+                f"{row['expansion_probability']*100:.1f}%",
+                help=(
+                    "Predicted probability of a future account "
+                    "upgrade within 90 days from the frozen "
+                    "expansion Logistic Regression."
+                )
             )
 
             c2.metric(
                 "Opportunity",
-                row["expansion_opportunity"]
+                row["expansion_opportunity"],
+                help=(
+                    "Expansion-opportunity bands: High ≥40%; "
+                    "Moderate 25%–<40%; Low <25%. These indicate "
+                    "prioritisation signal, not a guarantee."
+                )
             )
 
-
-        st.write(
-            f"**Suggested action:** "
-            f"{row['suggested_action']}"
+        st.markdown(
+            f'''
+            <div class="suggested-action-card">
+                <div class="suggested-action-label">Suggested action</div>
+                <div class="suggested-action-text">{row["suggested_action"]}</div>
+            </div>
+            ''',
+            unsafe_allow_html=True
         )
+
 
 
         st.markdown("---")
@@ -1063,8 +1203,17 @@ with tab2:
         # SHAP
         # ----------------------------------------------------
 
-        st.subheader(
-            "Why: factors contributing to this prediction"
+        st.markdown(
+            """
+            <div class="shap-title">
+                Why: factors contributing to this prediction
+                <span
+                    class="shap-info"
+                    title="These values show each factor's contribution to this account's specific churn prediction, not a causal explanation. A factor increasing predicted risk does not mean changing it would prevent churn. Use this to guide investigation, not as a prescribed intervention."
+                >i</span>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
 
@@ -1120,15 +1269,6 @@ with tab2:
         )
 
 
-        st.caption(
-            "These values show each factor's contribution "
-            "to this account's specific churn prediction, "
-            "not a causal explanation. A factor increasing "
-            "predicted risk does not mean changing it would "
-            "prevent churn — use this to guide investigation, "
-            "not as a prescribed intervention."
-        )
-
 
 # ============================================================
 # TAB 3 — EXPANSION OPPORTUNITIES
@@ -1139,13 +1279,11 @@ with tab3:
     st.subheader(
         "Which accounts show expansion opportunity?"
     )
+    right_hover_info(DECISION_SUPPORT_INFO)
 
-
-    st.caption(
-        "Expansion probability estimates the model's "
-        "statistical signal for a future account upgrade "
-        "within 90 days. It is a prioritisation signal, "
-        "not a guarantee of expansion."
+    hover_info(
+        EXPANSION_INFO,
+        label="ⓘ About expansion probability"
     )
 
 
@@ -1323,10 +1461,10 @@ issues before expansion outreach.
 
 st.markdown("---")
 
-st.caption(
-    "Decision-support prototype developed for the "
-    "RavenStack dissertation. Churn and expansion models "
-    "are separate frozen predictive models. Model outputs "
-    "should support, not replace, Product Management and "
-    "Customer Success judgement."
+st.markdown(
+    '<div style="text-align:center;color:#777;font-size:0.82rem;">'
+    '<span title="' + DECISION_SUPPORT_INFO.replace('"', "&quot;") + '" '
+    'style="cursor:help;">ⓘ About this decision-support tool</span>'
+    '</div>',
+    unsafe_allow_html=True
 )
