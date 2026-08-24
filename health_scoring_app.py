@@ -729,6 +729,13 @@ st.markdown(
         margin-bottom: 0.2rem;
     }
 
+    /* Hide Streamlit heading anchor/link icons while retaining headings. */
+    h1 a, h2 a, h3 a, h4 a, h5 a, h6 a,
+    h1 button, h2 button, h3 button, h4 button, h5 button, h6 button {
+        display: none !important;
+        visibility: hidden !important;
+    }
+
     .shap-info {
         display: inline-flex;
         align-items: center;
@@ -1085,11 +1092,7 @@ with tab2:
 
             c2.metric(
                 "Health score",
-                f"{row['model_derived_health_score']:.1f} / 100",
-                help=(
-                    "Model-derived score calculated as "
-                    "100 minus predicted churn probability."
-                )
+                f"{row['model_derived_health_score']:.1f} / 100"
             )
 
             c3.metric(
@@ -1134,13 +1137,7 @@ with tab2:
             )
 
         st.markdown(
-            f'''
-            <div class="suggested-action-card">
-                <div class="suggested-action-label">Suggested action</div>
-                <div class="suggested-action-text">{row["suggested_action"]}</div>
-            </div>
-            ''',
-            unsafe_allow_html=True
+            f'**Suggested action:** {row["suggested_action"]}'
         )
 
 
@@ -1232,7 +1229,7 @@ with tab2:
 
 
         fig, ax = plt.subplots(
-            figsize=(7, 3)
+            figsize=(9, 4)
         )
 
 
@@ -1460,11 +1457,3 @@ issues before expansion outreach.
 # ============================================================
 
 st.markdown("---")
-
-st.markdown(
-    '<div style="text-align:center;color:#777;font-size:0.82rem;">'
-    '<span title="' + DECISION_SUPPORT_INFO.replace('"', "&quot;") + '" '
-    'style="cursor:help;">ⓘ About this decision-support tool</span>'
-    '</div>',
-    unsafe_allow_html=True
-)
