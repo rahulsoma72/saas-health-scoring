@@ -750,9 +750,7 @@ with st.expander(
 - Fresh holdout ROC-AUC: {expansion_metadata['fresh_holdout_roc_auc']:.4f}
 - Output: expansion probability
 
-Both models are frozen and are applied to the selected
-account snapshot. Neither model is retrained when the
-cutoff date, lookback window, or uploaded data are changed.
+
 """
     )
 
@@ -971,12 +969,7 @@ with tab1:
 
     st.markdown("---")
 
-    st.caption(
-        "Decision-support prototype developed for the RavenStack dissertation. "
-        "Churn and expansion models are separate frozen predictive models. "
-        "Model outputs should support, not replace, Product Management and "
-        "Customer Success judgement."
-    )
+
 
 
 
@@ -1204,12 +1197,7 @@ with tab2:
 
     st.markdown("---")
 
-    st.caption(
-        "Decision-support prototype developed for the RavenStack dissertation. "
-        "Churn and expansion models are separate frozen predictive models. "
-        "Model outputs should support, not replace, Product Management and "
-        "Customer Success judgement."
-    )
+
 
 
 
