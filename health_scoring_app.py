@@ -535,10 +535,10 @@ scored["expansion_probability"] = (
 
 def expansion_band(p):
 
-    if p >= 0.40:
+    if p >= 0.56:
         return "High"
 
-    elif p >= 0.25:
+    elif p >= 0.42:
         return "Moderate"
 
     else:
