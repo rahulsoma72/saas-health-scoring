@@ -134,25 +134,23 @@ cutoff_date = st.sidebar.date_input(
     "Prediction cutoff date",
     value=pd.Timestamp("2024-09-30"),
     help=(
-        "Default settings match the dissertation modelling "
-        "configuration: 30 September 2024 cutoff with a "
-        "90-day historical lookback. Changing the cutoff "
-        "creates a different historical account snapshot and "
-        "recalculates the model inputs for that date. The "
-        "same frozen churn and expansion models are applied; "
-        "neither model is retrained. Prediction dates are "
-        "available only where the loaded data provide "
-        "sufficient historical information."
-    )
+    "The validated dissertation configuration uses a "
+    "30 September 2024 cutoff with a 90-day historical "
+    "lookback. Changing the cutoff or lookback produces "
+    "a different account snapshot that has not been "
+    "separately validated. The frozen churn and expansion "
+    "models are applied without retraining."
+)
 )
 
 cutoff_date = pd.Timestamp(cutoff_date)
 
 lookback_days = st.sidebar.number_input(
     "Lookback window (days)",
-    min_value=30,
-    max_value=365,
-    value=90
+    min_value=90,
+    max_value=90,
+    value=90,
+    disabled=True
 )
 
 
@@ -1213,14 +1211,17 @@ with tab3:
         "How expansion probability is calculated"
     ):
         st.write(
-            "Expansion probability is produced by the frozen "
-            "Logistic Regression model using account age, "
-            "subscription tenure, and days since the latest "
-            "subscription start. It represents the model's "
-            "statistical signal for a future account upgrade "
-            "within 90 days. It is a prioritisation signal, "
-            "not a guarantee of expansion."
-        )
+    "Expansion probability is produced by the frozen "
+    "Logistic Regression model using account age, "
+    "subscription tenure, and days since the latest "
+    "subscription start. It represents the model's "
+    "statistical signal for a future account upgrade "
+    "within 90 days. It is a prioritisation signal, "
+    "not a guarantee of expansion. The High, Moderate "
+    "and Low bands are descriptive prioritisation "
+    "categories used by the tool and are not "
+    "statistically validated decision thresholds."
+)
 
 
     expansion_order = [
